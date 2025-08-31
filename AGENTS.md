@@ -36,3 +36,5 @@
 ## i18n & UI Notes
 - Text strings come from `locales/*.json` via `i18n.py`. When adding UI, add keys for both `en.json` and `ja.json`.
 - Keep UI responsive and accessible; follow existing styles in `styles.py` and widgets in `ui_components.py`.
+
+最後の回答は必ず日本語で行うこと。
