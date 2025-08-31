@@ -122,6 +122,7 @@
   "free_input.prompt_label": "Enter prompt:",
   "free_input.manual_prompt": "Manual Prompt",
   "free_input.attach_prompt_default": "Please analyze the attached file(s) and answer.",
+  "free_input.attach_image_transform_default": "Convert this image to a vivid color tone. Return the result as an image (PNG).",
 
   "api.title": "API",
   "api.enter_key": "Enter API key.",

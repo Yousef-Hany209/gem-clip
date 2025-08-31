@@ -121,6 +121,7 @@
   "free_input.prompt_label": "プロンプトを入力してください:",
   "free_input.manual_prompt": "手入力プロンプト",
   "free_input.attach_prompt_default": "添付ファイルの内容を読み取り、指示に従って回答してください。",
+  "free_input.attach_image_transform_default": "この画像の色調を鮮やかにし、結果を画像（PNG）として出力してください。",
 
   "api.title": "API",
   "api.enter_key": "APIキーを入力してください。",

@@ -618,6 +618,10 @@ class ClipboardToolAgent(BaseAgent):
                 if run_id is not None:
                     out_id = db.add_run_output(run_id, prompt_id=prompt_id, input_id=None, content_text=full_text or None, error_json=None, content_blob=last_image_png)
                     db.mark_output_copied(out_id)
+                    try:
+                        db.finish_run(run_id, status="success")
+                    except Exception:
+                        pass
             except Exception:
                 pass
             # Also keep as last_result_text for refine to work minimally
@@ -630,6 +634,10 @@ class ClipboardToolAgent(BaseAgent):
                 if run_id is not None:
                     out_id = db.add_run_output(run_id, prompt_id=prompt_id, input_id=None, content_text=full_text)
                     db.mark_output_copied(out_id)
+                    try:
+                        db.finish_run(run_id, status='success')
+                    except Exception:
+                        pass
             except Exception:
                 pass
             self.last_result_text = full_text
@@ -845,10 +853,17 @@ class ClipboardToolAgent(BaseAgent):
                 except Exception:
                     return False
             if user_parts and not _has_text_part(user_parts):
-                try:
-                    user_parts.insert(0, {"text": tr("free_input.attach_prompt_default")})
-                except Exception:
-                    user_parts.insert(0, {"text": "Please analyze the attached file(s)."})
+                # For image-output capable model, prefer a transform instruction that yields an image.
+                if self._is_image_output_capable(final_model_name):
+                    try:
+                        user_parts.insert(0, {"text": tr("free_input.attach_image_transform_default")})
+                    except Exception:
+                        user_parts.insert(0, {"text": "Convert this image to a vivid color tone. Return the result as an image (PNG)."})
+                else:
+                    try:
+                        user_parts.insert(0, {"text": tr("free_input.attach_prompt_default")})
+                    except Exception:
+                        user_parts.insert(0, {"text": "Please analyze the attached file(s)."})
 
             # For backward compatibility, keep a flat list (not used for send anymore)
             contents_to_send = user_parts[:] if user_parts else contents_to_send
