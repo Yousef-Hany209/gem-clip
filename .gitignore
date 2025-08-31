@@ -49,6 +49,7 @@ logs/
 .vscode/
 .idea/
 *.code-workspace
+AGENTS.md
 
 # OS-specific files
 .DS_Store
