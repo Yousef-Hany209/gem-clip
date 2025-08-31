@@ -1,0 +1,6 @@
+{
+  "name": "複雑な内容を箇条書きで要約",
+  "model": "gemini-2.5-flash",
+  "system_prompt": "以下の専門的なテキストの要点を抽出し、簡潔に最大5つまでの箇条書きで要約してください。",
+  "parameters": { "temperature": 0.5 }
+}
