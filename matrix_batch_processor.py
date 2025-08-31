@@ -40,6 +40,7 @@ from pathlib import Path
 from gemclip.core import DELETE_ICON_FILE
 import traceback
 from gemclip.core import create_image_part # create_image_partをインポート
+from pathlib import Path
 from gemclip.features.matrix.view import SizerGrip
 from gemclip.features.matrix.tabbar import render_tabbar, compute_slot_width, adjust_tabbar_widths
 from gemclip.features.matrix.layout import configure_scrollable_grid, save_active_tab_vars
@@ -51,6 +52,171 @@ from CTkMessagebox import CTkMessagebox
 
 # UI feature flags (keep interface simple by default)
 SHOW_FILE_SESSION_UI = False  # Hide legacy file session save/load UI; prefer DB sessions + import/export
+
+
+def _is_image_output_capable(model_id: str) -> bool:
+    """Return True if the given model id supports image output (google.genai path).
+
+    Checks models.json capabilities; falls back to known id.
+    """
+    try:
+        import json
+        p = Path(__file__).resolve().parent / "models.json"
+        if not p.exists():
+            p = Path("models.json")
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for m in data:
+                if m.get("id") == model_id:
+                    caps = m.get("capabilities") or {}
+                    return bool(caps.get("output_image"))
+    except Exception:
+        pass
+    return model_id == "gemini-2.5-flash-image-preview"
+
+
+async def _generate_image_output(self, parts: List[Any], prompt_config: Prompt, run_id: Optional[int], r_idx: int, c_idx: int) -> tuple[str, Optional[bytes], str]:
+    """Generate via google.genai for image-output capable models.
+
+    - Maps existing parts to google.genai types
+    - Streams response and captures inline image
+    - Copies image to clipboard via agent helper
+    - Saves blob to DB
+    Returns a brief message to display in the cell.
+    """
+    try:
+        from google import genai as g2
+        from google.genai import types as g2types
+    except Exception as e:
+        logging.error(f"google.genai unavailable: {e}")
+        return tr("notify.unexpected_error", details=str(e))
+
+    g2_parts: List[Any] = []
+    for p in parts or []:
+        try:
+            if isinstance(p, dict) and isinstance(p.get("text"), str):
+                txt = p.get("text")
+                if txt and txt.strip():
+                    g2_parts.append(g2types.Part.from_text(text=txt))
+            elif isinstance(p, dict) and isinstance(p.get("inline_data"), dict):
+                inline = p["inline_data"]
+                mime = inline.get("mime_type") or "image/png"
+                data = inline.get("data")
+                if isinstance(data, str):
+                    import base64 as _b64
+                    data = _b64.b64decode(data)
+                if data:
+                    g2_parts.append(g2types.Part.from_bytes(mime_type=mime, data=data))
+        except Exception:
+            pass
+
+    # Ensure instruction text is present when only image/file parts exist
+    try:
+        has_text = False
+        for pp in g2_parts:
+            if hasattr(pp, 'text') and getattr(pp, 'text'):
+                has_text = True
+                break
+        if (not has_text) and (getattr(prompt_config, 'system_prompt', '') or '').strip():
+            g2_parts.insert(0, g2types.Part.from_text(text=prompt_config.system_prompt))
+    except Exception:
+        pass
+
+    contents = [g2types.Content(role="user", parts=g2_parts if g2_parts else [g2types.Part.from_text(text=prompt_config.system_prompt or "")])]
+    cfg = g2types.GenerateContentConfig(response_modalities=["IMAGE","TEXT"], temperature=prompt_config.parameters.temperature)
+
+    try:
+        _k = getattr(self.agent, 'api_key', None)
+    except Exception:
+        _k = None
+    client = g2.Client(api_key=_k) if _k else g2.Client()
+    last_image_png: Optional[bytes] = None
+    full_text = ""
+    image_count = 0
+    try:
+        responses = client.models.generate_content_stream(model=prompt_config.model, contents=contents, config=cfg)
+        for chunk in responses:
+            try:
+                if getattr(chunk, "text", None):
+                    full_text += chunk.text
+            except Exception:
+                pass
+            try:
+                cands = getattr(chunk, "candidates", None)
+                if cands and cands[0].content and cands[0].content.parts:
+                    for part in cands[0].content.parts:
+                        inline = getattr(part, "inline_data", None)
+                        if inline and getattr(inline, "data", None):
+                            last_image_png = inline.data
+                            image_count += 1
+            except Exception:
+                pass
+    except Exception as e:
+        # Retry with IMAGE-only modality on INVALID_ARGUMENT
+        try:
+            if "INVALID_ARGUMENT" in str(e) or "invalid argument" in str(e).lower():
+                cfg2 = g2types.GenerateContentConfig(response_modalities=["IMAGE"], temperature=prompt_config.parameters.temperature)
+                responses = client.models.generate_content_stream(model=prompt_config.model, contents=contents, config=cfg2)
+                for chunk in responses:
+                    try:
+                        cands = getattr(chunk, "candidates", None)
+                        if cands and cands[0].content and cands[0].content.parts:
+                            for part in cands[0].content.parts:
+                                inline = getattr(part, "inline_data", None)
+                                if inline and getattr(inline, "data", None):
+                                    last_image_png = inline.data
+                                    image_count += 1
+                    except Exception:
+                        pass
+            else:
+                raise
+        except Exception as ee:
+            logging.exception("genai image generation failed")
+            return (tr("notify.unexpected_error", details=str(ee)), None, "")
+
+    # Copy to clipboard and store DB
+    if last_image_png:
+        try:
+            # Reuse agent helper for clipboard
+            if hasattr(self.agent, '_copy_image_bytes_to_clipboard'):
+                self.agent._copy_image_bytes_to_clipboard(last_image_png)
+        except Exception:
+            logging.exception("clipboard image copy failed")
+        # Update cell UI with thumbnail
+        try:
+            self.after(0, self._set_result_image_cell, r_idx, c_idx, last_image_png)
+        except Exception:
+            pass
+        # Save output
+        try:
+            input_id = self._ensure_db_input_id(r_idx)
+            prompt_id_db = self._ensure_db_prompt_id(c_idx, prompt_config)
+            out_id = None
+            if run_id is not None:
+                out_id = db.add_run_output(run_id, prompt_id=None, input_id=None, content_text=(full_text or None), content_blob=last_image_png)
+                # Compute best-effort cost (output image tokens only)
+                try:
+                    import json
+                    price_path = Path("api_price.json")
+                    info = json.loads(price_path.read_text(encoding='utf-8')) if price_path.exists() else {}
+                    model_info = info.get(prompt_config.model, {})
+                    ocost = float(model_info.get('output_cost_per_thousand_tokens', 0))
+                    per_img = int(model_info.get('image_output_tokens_per_image', 1290))
+                    output_tokens = int(image_count * per_img)
+                    est_cost = (output_tokens / 1000.0) * ocost
+                    db.finish_run(run_id, status='success', input_tokens=0, output_tokens=output_tokens, cost_usd=est_cost)
+                except Exception:
+                    db.finish_run(run_id, status='success')
+            if input_id and prompt_id_db:
+                self._ensure_db_session_tab()
+                if self._db_tab_id is not None:
+                    db.add_matrix_result(self._db_tab_id, input_id, prompt_id_db, run_id, out_id, full_text or tr("history.image"))
+        except Exception:
+            pass
+        return (tr("common.copied_to_clipboard"), last_image_png, full_text or "")
+    # No image returned -> show text or empty
+    return (full_text or tr("matrix.response_empty"), None, full_text or "")
 
 
 def apply_loaded_tab_preserve_tabs(win, data: dict):
@@ -188,6 +354,10 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
         self._cell_style: List[List[str]] = []  # "normal" or "flow"
         self._flow_cancel_requested: bool = False
         self._flow_tasks: List[asyncio.Task] = []
+        # For image outputs per cell
+        self._result_image_labels: List[List[Optional[ctk.CTkLabel]]] = []
+        self._result_image_thumbs: List[List[Optional[ctk.CTkImage]]] = []
+        self._result_image_bytes: Dict[tuple, bytes] = {}
         # DB session/tab identifiers and caches
         self._db_session_id: Optional[int] = None
         self._db_tab_id: Optional[int] = None
@@ -215,6 +385,35 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
         self._create_main_grid_frame()
         self.after(100, self._update_ui) # 遅延させてUIを更新
         self.state('zoomed') # ウィンドウを最大化
+
+    # --- Centering helpers for dialogs ---
+    def _center_toplevel(self, win: ctk.CTkToplevel) -> None:
+        try:
+            win.update_idletasks()
+            sw = win.winfo_screenwidth()
+            sh = win.winfo_screenheight()
+            w = max(1, win.winfo_width())
+            h = max(1, win.winfo_height())
+            x = (sw - w) // 2
+            y = (sh - h) // 2
+            win.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception:
+            pass
+
+    def _confirm_yes_no(self, title: str, message: str) -> bool:
+        box = CTkMessagebox(title=title, message=message, icon='question', option_1=tr('common.cancel'), option_2=tr('common.ok'))
+        self._center_toplevel(box)
+        return box.get() == tr('common.ok')
+
+    def _ask_ok_cancel(self, title: str, message: str) -> bool:
+        box = CTkMessagebox(title=title, message=message, icon='question', option_1=tr('common.cancel'), option_2=tr('common.ok'))
+        self._center_toplevel(box)
+        return box.get() == tr('common.ok')
+
+    def _show_info_box(self, title: str, message: str) -> None:
+        box = CTkMessagebox(title=title, message=message, icon='info')
+        self._center_toplevel(box)
+        box.wait_window()
 
     # --- Helpers: normalize inputs structure ---
     def _normalize_inputs_list(self, inputs: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -546,6 +745,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
         Returns: 'save' | 'discard' | 'cancel' | None
         """
         dlg = ctk.CTkToplevel(self, fg_color=styles.HISTORY_ITEM_FG_COLOR)
+        self._center_toplevel(dlg)
         try:
             dlg.transient(self)
             dlg.lift(self)
@@ -628,6 +828,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                 default_name = ''
 
         dlg = ctk.CTkToplevel(self)
+        self._center_toplevel(dlg)
         dlg.title(tr("matrix.toolbar.save_as"))
         dlg.transient(self)
         try:
@@ -854,7 +1055,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
             tab_name = str(self._tabs[idx].get('name') or '')
         except Exception:
             tab_name = ''
-        if not messagebox.askyesno(tr("common.delete_confirm_title"), tr("matrix.tab.delete_confirm", name=tab_name)):
+        if not self._confirm_yes_no(tr("common.delete_confirm_title"), tr("matrix.tab.delete_confirm", name=tab_name)):
             return
         del self._tabs[idx]
         if not self._tabs:
@@ -929,7 +1130,9 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
     def _add_prompt_set_tab(self):
         # Limit to 5 tabs
         if len(self._tabs) >= 5:
-            CTkMessagebox(title=tr("matrix.tab.limit_title"), message=tr("matrix.tab.limit_message", max=5), icon="warning").wait_window()
+            box = CTkMessagebox(title=tr("matrix.tab.limit_title"), message=tr("matrix.tab.limit_message", max=5), icon="warning")
+            self._center_toplevel(box)
+            box.wait_window()
             return
         # Show preset chooser
         preset = self._choose_preset_dialog()
@@ -978,9 +1181,13 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
             file.write_text(json.dumps({'name': name, 'prompts': serialized}, ensure_ascii=False, indent=2), encoding='utf-8')
             # Update tab title
             self._rebuild_tabs()
-            CTkMessagebox(title=tr("common.success"), message=tr("matrix.preset.saved"), icon="info").wait_window()
+            box = CTkMessagebox(title=tr("common.success"), message=tr("matrix.preset.saved"), icon="info")
+            self._center_toplevel(box)
+            box.wait_window()
         except Exception as e:
-            CTkMessagebox(title=tr("common.error"), message=tr("matrix.preset.save_failed", details=str(e)), icon="cancel").wait_window()
+                box = CTkMessagebox(title=tr("common.error"), message=tr("matrix.preset.save_failed", details=str(e)), icon="cancel")
+                self._center_toplevel(box)
+                box.wait_window()
 
     def _delete_active_tab(self):
         """アクティブなタブ（プロンプトセット）を削除する"""
@@ -991,7 +1198,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
             tab_name = self._tabs[self._active_tab_index]['name'] if 0 <= self._active_tab_index < len(self._tabs) else ""
         except Exception:
             tab_name = ""
-        if not messagebox.askyesno(tr("common.delete_confirm_title"), tr("matrix.tab.delete_confirm", name=tab_name)):
+        if not self._confirm_yes_no(tr("common.delete_confirm_title"), tr("matrix.tab.delete_confirm", name=tab_name)):
             return
         try:
             del self._tabs[self._active_tab_index]
@@ -1041,6 +1248,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
 
         # Simple chooser using CTkOptionMenu in a small dialog
         dlg = ctk.CTkToplevel(self, fg_color=styles.HISTORY_ITEM_FG_COLOR)
+        self._center_toplevel(dlg)
         dlg.title(tr("matrix.preset.add_from_title"))
         dlg.geometry("360x160")
         dlg.transient(self)
@@ -1078,6 +1286,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
 
     def _prompt_text_input(self, title: str, label: str, default: str = "") -> Optional[str]:
         dlg = ctk.CTkToplevel(self, fg_color=styles.HISTORY_ITEM_FG_COLOR)
+        self._center_toplevel(dlg)
         dlg.title(title)
         dlg.geometry("360x140")
         dlg.transient(self)
@@ -1178,6 +1387,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
 
     def _open_set_manager(self):
         dlg = ctk.CTkToplevel(self, fg_color=styles.HISTORY_ITEM_FG_COLOR)
+        self._center_toplevel(dlg)
         dlg.title(tr("matrix.set.manager_title"))
         dlg.geometry("520x240")
         dlg.transient(self)
@@ -1228,10 +1438,14 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                 f = self._prompt_set_dir() / f"{name}.json"
                 if f.exists():
                     f.unlink()
-                    CTkMessagebox(title=tr("common.success"), message=tr("matrix.set.deleted"), icon="info").wait_window()
+                box = CTkMessagebox(title=tr("common.success"), message=tr("matrix.set.deleted"), icon="info")
+                self._center_toplevel(box)
+                box.wait_window()
                     dlg.destroy()
             except Exception as e:
-                CTkMessagebox(title=tr("common.error"), message=tr("matrix.set.delete_failed", details=str(e)), icon="cancel").wait_window()
+                box = CTkMessagebox(title=tr("common.error"), message=tr("matrix.set.delete_failed", details=str(e)), icon="cancel")
+                self._center_toplevel(box)
+                box.wait_window()
         ctk.CTkButton(row2, text=tr("common.delete"), command=do_delete, fg_color=styles.DELETE_BUTTON_COLOR, text_color=styles.DEFAULT_BUTTON_TEXT_COLOR, hover_color=styles.DELETE_BUTTON_HOVER_COLOR).pack(side='left', padx=(6,0))
 
     def _open_session_manager(self):
@@ -1243,6 +1457,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
         except Exception:
             pass
         dlg = ctk.CTkToplevel(self, fg_color=styles.HISTORY_ITEM_FG_COLOR)
+        self._center_toplevel(dlg)
         dlg.title(tr("matrix.session.manager_title"))
         # Widen width to avoid button cutoff; reduce height for tighter clearance
         dlg.geometry("680x200")
@@ -1285,7 +1500,8 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                 if not sel:
                     return
                 sid = int(sel.split('#')[-1].rstrip(')'))
-                top = ctk.CTkToplevel(dlg)
+            top = ctk.CTkToplevel(dlg)
+            self._center_toplevel(top)
                 top.title(tr("common.edit"))
                 try:
                     top.transient(dlg)
@@ -1355,7 +1571,8 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                 if not sel:
                     return
                 tid = int(sel.split('#')[-1].rstrip(')'))
-                top = ctk.CTkToplevel(dlg)
+            top = ctk.CTkToplevel(dlg)
+            self._center_toplevel(top)
                 top.title(tr("common.edit"))
                 try:
                     top.transient(dlg)
@@ -1426,6 +1643,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
         except Exception:
             pass
         dlg = ctk.CTkToplevel(self, fg_color=styles.HISTORY_ITEM_FG_COLOR)
+        self._center_toplevel(dlg)
         dlg.title(tr("matrix.toolbar.load"))
         dlg.geometry("520x300")
         dlg.transient(self)
@@ -2007,6 +2225,11 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
         cell_frame.grid(row=row_idx + 1, column=col_idx + 1, padx=5, pady=5, sticky="nsew")
         cell_frame.grid_propagate(False)
         cell_frame.grid_columnconfigure(1, weight=1)
+        try:
+            cell_frame.grid_rowconfigure(0, weight=0)
+            cell_frame.grid_rowconfigure(1, weight=1)
+        except Exception:
+            pass
 
         checkbox = ctk.CTkCheckBox(
             cell_frame,
@@ -2017,10 +2240,10 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
         )
         checkbox.grid(row=0, column=0, padx=0, pady=2, sticky="w")
 
-        inner_h = max(20, styles.MATRIX_RESULT_CELL_HEIGHT - 6)
+        inner_h = max(20, styles.MATRIX_RESULT_CELL_HEIGHT // 2)
         result_textbox = ctk.CTkTextbox(cell_frame, wrap="word", height=inner_h, font=styles.MATRIX_RESULT_FONT, fg_color=styles.HISTORY_ITEM_FG_COLOR, text_color=styles.HISTORY_ITEM_TEXT_COLOR)
         setup_textbox_right_click_menu(result_textbox)
-        result_textbox.grid(row=0, column=1, padx=(0,2), pady=2, sticky="nsew")
+        result_textbox.grid(row=1, column=1, padx=(0,2), pady=(2,2), sticky="nsew")
         result_textbox.insert("1.0", self.results[row_idx][col_idx].get())
         result_textbox.configure(state="disabled")
         result_textbox.bind("<Button-1>", lambda event, r=row_idx, c=col_idx: self._show_full_result_popup(r, c))
@@ -2037,6 +2260,93 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
             self._cell_style.append([])
         while len(self._cell_style[row_idx]) <= col_idx:
             self._cell_style[row_idx].append("normal")
+
+        # Image label overlay (hidden by default)
+        while len(self._result_image_labels) <= row_idx:
+            self._result_image_labels.append([])
+        while len(self._result_image_labels[row_idx]) <= col_idx:
+            self._result_image_labels[row_idx].append(None)
+        img_label = ctk.CTkLabel(cell_frame, text="")
+        img_label.grid(row=0, column=1, padx=(0,2), pady=(2,0), sticky="nsew")
+        try:
+            img_label.grid_remove()
+        except Exception:
+            pass
+        img_label.bind("<Button-1>", lambda e, r=row_idx, c=col_idx: self._show_output_image_popup(r, c))
+        self._result_image_labels[row_idx][col_idx] = img_label
+
+        while len(self._result_image_thumbs) <= row_idx:
+            self._result_image_thumbs.append([])
+        while len(self._result_image_thumbs[row_idx]) <= col_idx:
+            self._result_image_thumbs[row_idx].append(None)
+
+    def _show_output_image_popup(self, r_idx: int, c_idx: int) -> None:
+        try:
+            key = (r_idx, c_idx)
+            if key not in self._result_image_bytes:
+                return
+            from PIL import Image
+            import io
+            raw = self._result_image_bytes[key]
+            im = Image.open(io.BytesIO(raw))
+            popup = ctk.CTkToplevel(self, fg_color=styles.HISTORY_ITEM_FG_COLOR)
+            self._center_toplevel(popup)
+            popup.title(tr("matrix.result_preview_title_fmt", row=r_idx+1, col=chr(ord('A')+c_idx)))
+            max_w = int(self.winfo_width() * 0.7)
+            max_h = int(self.winfo_height() * 0.7)
+            im.thumbnail((max_w, max_h))
+            cimg = ctk.CTkImage(light_image=im, dark_image=im, size=im.size)
+            lbl = ctk.CTkLabel(popup, image=cimg, text="")
+            lbl.pack(padx=10, pady=10)
+            # keep reference
+            lbl._img_ref = cimg  # type: ignore
+            btn = ctk.CTkButton(popup, text=tr("common.close"), command=popup.destroy, fg_color=styles.DEFAULT_BUTTON_FG_COLOR, text_color=styles.DEFAULT_BUTTON_TEXT_COLOR)
+            btn.pack(pady=6)
+            try:
+                popup.transient(self)
+                popup.lift(self)
+                popup.attributes("-topmost", True)
+                popup.after(200, lambda: popup.attributes("-topmost", False))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _set_result_image_cell(self, r_idx: int, c_idx: int, png_bytes: bytes) -> None:
+        try:
+            import io
+            from PIL import Image
+            key = (r_idx, c_idx)
+            self._result_image_bytes[key] = png_bytes
+            # build thumbnail
+            im = Image.open(io.BytesIO(png_bytes))
+            im.thumbnail(styles.MATRIX_IMAGE_THUMBNAIL_SIZE)
+            cimg = ctk.CTkImage(light_image=im, dark_image=im, size=im.size)
+            # swap widgets: hide textbox, show label
+            lbl = None
+            tb = None
+            try:
+                lbl = self._result_image_labels[r_idx][c_idx]
+            except Exception:
+                lbl = None
+            try:
+                tb = self._result_textboxes[r_idx][c_idx]
+            except Exception:
+                tb = None
+            if lbl is not None:
+                lbl.configure(image=cimg, text="")
+                lbl._img_ref = cimg  # prevent GC
+                try:
+                    lbl.grid()
+                except Exception:
+                    pass
+            if tb is not None and tb.winfo_exists():
+                try:
+                    tb.grid_remove()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _on_cell_checkbox_toggled(self, r_idx: int, c_idx: int) -> None:
         """Persist checkbox state for a cell into the DB (matrix_cell)."""
@@ -2138,7 +2448,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
             pass
 
     def _clear_all(self):
-        if not messagebox.askyesno(tr("matrix.clear_confirm_title"), tr("matrix.clear_confirm_message")):
+        if not self._confirm_yes_no(tr("matrix.clear_confirm_title"), tr("matrix.clear_confirm_message")):
             return
 
         self.input_data = [{"type": "text", "data": ""}]
@@ -2182,7 +2492,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                     checked_tasks.append((r_idx, c_idx, row_input, prompt_id))
         
         if not checked_tasks:
-            messagebox.showinfo(tr("matrix.run_title"), tr("matrix.no_checked_combinations"))
+            self._show_info_box(tr("matrix.run_title"), tr("matrix.no_checked_combinations"))
             return
 
         self.total_tasks = len(checked_tasks)
@@ -2311,7 +2621,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
             lines.append(f"{tr('action.input').rstrip(':')}{r_idx+1}: {len(cols)} {tr('matrix.flow.steps_label')} ({flow_str})")
             total_steps += len(cols)
         if total_steps == 0:
-            messagebox.showinfo(tr("matrix.flow.running_title"), tr("matrix.no_checked_combinations"))
+            self._show_info_box(tr("matrix.flow.running_title"), tr("matrix.no_checked_combinations"))
             return False
         # Overwrite notice
         overwrite = False
@@ -2327,8 +2637,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
         if overwrite:
             msg += f"\n\n{tr('matrix.flow.overwrite_note')}"
         msg += f"\n\n{tr('matrix.flow.max_steps_label')}: {self.max_flow_steps}"
-        res = messagebox.askokcancel(tr("matrix.flow.confirm_title"), msg)
-        return bool(res)
+        return self._ask_ok_cancel(tr("matrix.flow.confirm_title"), msg)
 
     def _run_flow_processing(self):
         # Build per-row plans of selected columns, limited and sorted by column index (A..)
@@ -2425,6 +2734,20 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                     if instr:
                         combined_parts.append({"text": instr})
                     combined_parts.extend(list(current_parts))
+                # If model expects image output and original input row is a file that is an image,
+                # replace file reference with inline image data so google.genai can consume it.
+                if _is_image_output_capable(prompt_config.model) and input_item.get('type') == 'file':
+                    try:
+                        fpath = input_item.get('data')
+                        mime_type, _ = mimetypes.guess_type(fpath)
+                        if mime_type and mime_type.startswith('image/'):
+                            img_bytes = Path(fpath).read_bytes()
+                            img_part = create_image_part(img_bytes)
+                            # Keep any text parts; ensure image part is present once
+                            combined_parts = [p for p in combined_parts if isinstance(p, dict) and 'text' in p]
+                            combined_parts.append(img_part)
+                    except Exception:
+                        pass
             except Exception:
                 combined_parts = list(current_parts) if current_parts else [{"text": ""}]
 
@@ -2434,6 +2757,33 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                 conv.append({"role": "user", "parts": [{"text": str(combined_parts)}]})
             try:
                 async with self.semaphore:
+                    # Image-output capable: use google.genai path
+                    if _is_image_output_capable(prompt_config.model):
+                        out_text, img_bytes, extracted_text = await _generate_image_output(self, combined_parts, prompt_config, run_id=None, r_idx=r_idx, c_idx=c_idx)
+                        # Update cell with result and style, and uncheck the box
+                        # Prefer showing extracted_text in the textbox while image thumbnail is shown
+                        shown_text = extracted_text if extracted_text else out_text
+                        self.after(0, self._update_cell_on_main_thread, r_idx, c_idx, shown_text, True)
+                        self._set_cell_style(r_idx, c_idx, "flow")
+                        try:
+                            self.after(0, lambda rr=r_idx, cc=c_idx: self.checkbox_states[rr][cc].set(False))
+                        except Exception:
+                            pass
+                        # Append model message and set next input using image if available
+                        try:
+                            if img_bytes:
+                                current_parts = [create_image_part(img_bytes)]
+                                conv.append({"role": "model", "parts": [{"text": out_text}]})
+                            else:
+                                conv.append({"role": "model", "parts": [{"text": out_text}]})
+                                current_parts = [{"text": out_text}]
+                        except Exception:
+                            current_parts = ([create_image_part(img_bytes)] if img_bytes else [{"text": out_text}])
+                            try:
+                                conv.append({"role": "model", "parts": [{"text": str(out_text)}]})
+                            except Exception:
+                                pass
+                        continue
                     gemini_model = GenerativeModel(prompt_config.model, system_instruction=prompt_config.system_prompt)
                     # Detect tools setting
                     has_url_text = any(isinstance(p, dict) and "text" in p and isinstance(p["text"], str) and p["text"].strip().startswith(("http://", "https://")) for p in combined_parts)
@@ -2557,8 +2907,13 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                         mime_type, _ = mimetypes.guess_type(file_path)
                         if not mime_type:
                             mime_type = "application/octet-stream"
-                        uploaded_file = await asyncio.to_thread(genai.upload_file, path=file_path, mime_type=mime_type)
-                        contents_to_send.append(uploaded_file)
+                        if _is_image_output_capable(prompt_config.model) and mime_type.startswith("image/"):
+                            # Inline image part for image-output model
+                            img_bytes = Path(file_path).read_bytes()
+                            contents_to_send.append(create_image_part(img_bytes))
+                        else:
+                            uploaded_file = await asyncio.to_thread(genai.upload_file, path=file_path, mime_type=mime_type)
+                            contents_to_send.append(uploaded_file)
                     except Exception as e:
                         raise RuntimeError(tr("notify.file_upload_failed", details=str(e)))
                 else:
@@ -2613,6 +2968,12 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                     run_id = None
 
                 try:
+                    if _is_image_output_capable(prompt_config.model):
+                        # Use image-output generation
+                        full_result, _img, extracted_text = await _generate_image_output(self, contents_to_send, prompt_config, run_id, r_idx, c_idx)
+                        # Update UI and skip the rest of this branch
+                        self.after(0, self._update_cell_on_main_thread, r_idx, c_idx, (extracted_text or full_result), True)
+                        return
                     response = await asyncio.to_thread(_gen_sync, generate_content_config)
                 except Exception:
                     if tools_list:

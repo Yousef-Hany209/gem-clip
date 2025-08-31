@@ -1314,7 +1314,26 @@ class SettingsWindow(ctk.CTkToplevel):
         except Exception:
             self.max_flow_steps_entry.insert(0, "5")
 
-        ctk.CTkButton(self, text=tr("settings.save_settings"), height=30, command=self._save_settings, fg_color=styles.DEFAULT_BUTTON_FG_COLOR, text_color=styles.DEFAULT_BUTTON_TEXT_COLOR).grid(row=6, column=0, columnspan=2, padx=10, pady=12)
+        # --- Currency settings (display currency and USD conversion rate) ---
+        ctk.CTkLabel(self, text=tr("settings.currency.code"), text_color=styles.HISTORY_ITEM_TEXT_COLOR).grid(row=7, column=0, padx=10, pady=8, sticky="w")
+        self.currency_code_entry = ctk.CTkEntry(self, width=140, fg_color=styles.HISTORY_ITEM_FG_COLOR, text_color=styles.HISTORY_ITEM_TEXT_COLOR)
+        try:
+            self.currency_code_entry.insert(0, getattr(self.agent.config, 'display_currency', 'USD'))
+        except Exception:
+            self.currency_code_entry.insert(0, 'USD')
+        self.currency_code_entry.grid(row=7, column=1, padx=10, pady=8, sticky="w")
+
+        ctk.CTkLabel(self, text=tr("settings.currency.rate"), text_color=styles.HISTORY_ITEM_TEXT_COLOR).grid(row=8, column=0, padx=10, pady=8, sticky="w")
+        self.currency_rate_entry = ctk.CTkEntry(self, width=140, fg_color=styles.HISTORY_ITEM_FG_COLOR, text_color=styles.HISTORY_ITEM_TEXT_COLOR)
+        try:
+            self.currency_rate_entry.insert(0, str(getattr(self.agent.config, 'usd_to_display_rate', 1.0)))
+        except Exception:
+            self.currency_rate_entry.insert(0, '1.0')
+        self.currency_rate_entry.grid(row=8, column=1, padx=10, pady=8, sticky="w")
+
+        # Save button placed at the bottom
+        self._save_button_row_index = 9
+        ctk.CTkButton(self, text=tr("settings.save_settings"), height=30, command=self._save_settings, fg_color=styles.DEFAULT_BUTTON_FG_COLOR, text_color=styles.DEFAULT_BUTTON_TEXT_COLOR).grid(row=self._save_button_row_index, column=0, columnspan=2, padx=10, pady=12)
 
     def _save_api_key(self):
         new_api_key = self.api_key_entry.get()
@@ -1505,6 +1524,17 @@ class SettingsWindow(ctk.CTkToplevel):
             except Exception:
                 pass
             save_config(self.agent.config)
+            # Currency settings
+            try:
+                code = (self.currency_code_entry.get() or 'USD').upper().strip()
+                rate = float(self.currency_rate_entry.get() or '1.0')
+                if rate <= 0:
+                    raise ValueError(tr("settings.currency.rate_invalid"))
+                self.agent.config.display_currency = code
+                self.agent.config.usd_to_display_rate = rate
+                save_config(self.agent.config)
+            except Exception as e:
+                CTkMessagebox(title=tr("common.error"), message=str(e), icon="warning").wait_window()
             if len(self.agent.clipboard_history) > self.agent.max_history_size:
                 self.agent.clipboard_history = self.agent.clipboard_history[-self.agent.max_history_size:]
             if self.agent._on_history_updated_callback:
@@ -1656,14 +1686,17 @@ class ResizableInputDialog(BaseDialog):
 
         # モデル選択
         ctk.CTkLabel(parameter_frame, text=tr("common.model"), text_color=styles.POPUP_TEXT_COLOR).grid(row=0, column=0, padx=(0, 10), pady=5, sticky="w")
-        # 利用可能なモデル（表示用とAPI用を対応付ける）
-        self.available_models = [
-            "gemini-2.5-flash-lite (高速、低精度)",
-            "gemini-2.5-flash (普通)",
-            "gemini-2.5-pro (低速、高精度)"
-        ]
+        # 利用可能なモデル（models.json 経由の集中定義を利用）
+        try:
+            self.available_models = [label for _, label in SUPPORTED_MODELS]
+        except Exception:
+            self.available_models = [
+                "gemini-2.5-flash-lite (高速、低精度)",
+                "gemini-2.5-flash (普通)",
+                "gemini-2.5-pro (低速、高精度)"
+            ]
         # 初期値として最初のモデルを選択
-        self.model_variable = ctk.StringVar(value=self.available_models[0])
+        self.model_variable = ctk.StringVar(value=(self.available_models[0] if self.available_models else "gemini-2.5-flash-lite (高速、低精度)"))
         self.model_optionmenu = ctk.CTkOptionMenu(parameter_frame, values=self.available_models, variable=self.model_variable)
         self.model_optionmenu.grid(row=0, column=1, pady=5, sticky="ew")
 

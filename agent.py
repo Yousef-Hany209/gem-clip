@@ -25,12 +25,13 @@ except Exception:  # pragma: no cover - non-Windows
 from PIL import Image, ImageGrab
 from google.api_core import exceptions
 from pystray import Icon, Menu, MenuItem
+from CTkMessagebox import CTkMessagebox
 from google.generativeai import types
 import google.generativeai as genai
 
 from gemclip.core import BaseAgent, LlmAgent, create_image_part, Prompt, PromptParameters
 from config_manager import load_config, save_config
-from gemclip.core import API_SERVICE_ID, APP_NAME, COMPLETION_SOUND_FILE, ICON_FILE
+from gemclip.core import API_SERVICE_ID, APP_NAME, COMPLETION_SOUND_FILE, ICON_FILE, model_label_to_id
 from gemclip.features.matrix import MatrixBatchProcessorWindow
 from gemclip.ui import (
     ActionSelectorWindow,
@@ -220,6 +221,15 @@ class ClipboardToolAgent(BaseAgent):
         except Exception as e:
             print(f"ERROR: API価格情報の読み込みに失敗しました: {e}")
             return {}
+
+    def _get_image_tokens_per_image(self, model_name: str) -> int:
+        try:
+            if not self.api_price_info:
+                return 1290
+            model_info = self.api_price_info.get(model_name) or {}
+            return int(model_info.get("image_output_tokens_per_image", 1290))
+        except Exception:
+            return 1290
 
     def _get_model_pricing(self, model_name: str, input_token_count: int = 0) -> tuple:
         """モデル名と入力トークン数に基づいて価格情報を取得する"""
@@ -529,6 +539,25 @@ class ClipboardToolAgent(BaseAgent):
     def _get_api_key(self) -> Optional[str]:
         return keyring.get_password(API_SERVICE_ID, "api_key")
 
+    def _format_cost_values(self, usd_amount: float) -> tuple[str, float, str]:
+        """Return a tuple (display_string, converted_amount, code) for the configured currency.
+
+        Always includes USD; if configured currency is not USD, append an approx line with the converted value.
+        """
+        try:
+            code = (getattr(self.config, 'display_currency', 'USD') or 'USD').upper()
+            rate = float(getattr(self.config, 'usd_to_display_rate', 1.0) or 1.0)
+        except Exception:
+            code = 'USD'
+            rate = 1.0
+        # Symbols
+        sym = {'USD': '$', 'JPY': '¥', 'EUR': '€'}.get(code, '')
+        if code == 'USD':
+            return (f"{sym}{usd_amount:.6f}", usd_amount, code)
+        converted = usd_amount * max(0.0, rate)
+        disp = f"${usd_amount:.6f} (≈ {sym}{converted:.2f} {code})" if sym else f"${usd_amount:.6f} (≈ {converted:.2f} {code})"
+        return (disp, converted, code)
+
     async def _generate_with_image_output_model(
         self,
         *,
@@ -590,6 +619,8 @@ class ClipboardToolAgent(BaseAgent):
 
         full_text = ""
         last_image_png: Optional[bytes] = None
+        input_token_count = 0
+        image_count = 0
 
         try:
             responses = client.models.generate_content_stream(
@@ -614,6 +645,7 @@ class ClipboardToolAgent(BaseAgent):
                             if inline and getattr(inline, "data", None):
                                 # Assume PNG bytes
                                 last_image_png = inline.data
+                                image_count += 1
                             # Some responses may return file_data instead of inline_data
                             fdat = getattr(part, "file_data", None)
                             if fdat and (getattr(fdat, "file_uri", None) or getattr(fdat, "file_id", None)) and not last_image_png:
@@ -623,13 +655,48 @@ class ClipboardToolAgent(BaseAgent):
                                     maybe_bytes = getattr(dl, "data", None) or getattr(dl, "bytes", None) or getattr(dl, "content", None)
                                     if isinstance(maybe_bytes, (bytes, bytearray)):
                                         last_image_png = bytes(maybe_bytes)
+                                        image_count += 1
                                 except Exception:
                                     pass
                 except Exception:
                     pass
         except Exception as e:
-            self._show_notification_ui(tr("notify.api_error_title"), tr("notify.unexpected_error", details=str(e)), level="error")
-            raise
+            # Retry with IMAGE-only modality on INVALID_ARGUMENT (some prompts/models reject TEXT modality)
+            try:
+                if "INVALID_ARGUMENT" in str(e) or "invalid argument" in str(e).lower():
+                    cfg_img_only = g2types.GenerateContentConfig(response_modalities=["IMAGE"], temperature=final_temperature)
+                    responses = client.models.generate_content_stream(model=final_model_name, contents=contents, config=cfg_img_only)
+                    for chunk in responses:
+                        try:
+                            cands = getattr(chunk, "candidates", None)
+                            if cands and cands[0].content and cands[0].content.parts:
+                                for part in cands[0].content.parts:
+                                    inline = getattr(part, "inline_data", None)
+                                    if inline and getattr(inline, "data", None):
+                                        last_image_png = inline.data
+                                        image_count += 1
+                        except Exception:
+                            pass
+                else:
+                    raise
+            except Exception as ee:
+                self._show_notification_ui(tr("notify.api_error_title"), tr("notify.unexpected_error", details=str(ee)), level="error")
+                raise
+
+        # Try to estimate tokens for text instruction (best-effort)
+        try:
+            from google.generativeai import GenerativeModel as _GM
+            _mdl = _GM(final_model_name)
+            # Concatenate only text parts for counting
+            text_parts = []
+            for p in user_parts or []:
+                if isinstance(p, dict) and isinstance(p.get("text"), str) and p.get("text").strip():
+                    text_parts.append(p.get("text"))
+            if text_parts:
+                ct_resp = await asyncio.to_thread(_mdl.count_tokens, contents="\n\n".join(text_parts))
+                input_token_count = int(getattr(ct_resp, 'total_tokens', 0) or 0)
+        except Exception:
+            input_token_count = 0
 
         # If image produced, copy to clipboard
         if last_image_png:
@@ -649,10 +716,41 @@ class ClipboardToolAgent(BaseAgent):
             enable_web=False,
         )
 
-        cost_message = tr("pricing.unavailable_suffix")
+        # 価格推定（画像出力の出力トークンを加味）
+        try:
+            icost, ocost = self._get_model_pricing(final_model_name, input_token_count)
+            per_img_tokens = self._get_image_tokens_per_image(final_model_name)
+            output_token_count = int(image_count * per_img_tokens)
+            estimated_cost = (input_token_count / 1000.0) * icost + (output_token_count / 1000.0) * ocost
+            cost_message_suffix = "" if (icost or ocost) else tr("pricing.unavailable_suffix")
+            disp_total, _, _ = self._format_cost_values(estimated_cost)
+            cost_message = f"{tr('pricing.estimated_cost_prefix')}{disp_total}{cost_message_suffix}" if (icost or ocost) else cost_message_suffix
+        except Exception:
+            output_token_count = 0
+            cost_message = tr("pricing.unavailable_suffix")
 
         # Notify and persist
         if last_image_png:
+            # Show modal dialog with detailed cost breakdown for visibility
+            try:
+                icost, ocost = self._get_model_pricing(final_model_name, input_token_count)
+                per_img_tokens = self._get_image_tokens_per_image(final_model_name)
+                out_tokens = int(image_count * per_img_tokens)
+                usd_input = (input_token_count / 1000.0) * icost
+                usd_output = (out_tokens / 1000.0) * ocost
+                disp_in, _, _ = self._format_cost_values(usd_input)
+                disp_out, _, _ = self._format_cost_values(usd_output)
+                disp_total, _, _ = self._format_cost_values(usd_input + usd_output)
+                msg = (
+                    f"{tr('notify.copied_fmt', name=final_prompt_name, cost='')}\n\n"
+                    f"- Input (text): {disp_in}\n"
+                    f"- Output (image x{image_count}): {disp_out}\n"
+                    f"= Total: {disp_total}"
+                )
+                if self.app:
+                    self.app.after(0, lambda: CTkMessagebox(title=tr('pricing.dialog.title'), message=msg, icon='info').wait_window())
+            except Exception:
+                pass
             self._show_notification_ui(tr("notify.done_title"), tr("notify.copied_fmt", name=final_prompt_name, cost=cost_message), level="success")
             # Persist run output (image in blob)
             try:
@@ -660,9 +758,9 @@ class ClipboardToolAgent(BaseAgent):
                     out_id = db.add_run_output(run_id, prompt_id=prompt_id, input_id=None, content_text=full_text or None, error_json=None, content_blob=last_image_png)
                     db.mark_output_copied(out_id)
                     try:
-                        db.finish_run(run_id, status="success")
+                        db.finish_run(run_id, status="success", input_tokens=input_token_count, output_tokens=output_token_count, cost_usd=estimated_cost)
                     except Exception:
-                        pass
+                        db.finish_run(run_id, status="success")
             except Exception:
                 pass
             # Also keep as last_result_text for refine to work minimally
@@ -694,7 +792,8 @@ class ClipboardToolAgent(BaseAgent):
                 try:
                     mime_type = self._guess_mime_type(file_path)
                     uploaded_file = await asyncio.to_thread(genai.upload_file, path=file_path, mime_type=mime_type) # genai.upload_file を使用
-                    contents.append({"type": "file", "file_ref": uploaded_file})
+                    # 後段で inline_data 化できるようローカルパスも保持
+                    contents.append({"type": "file", "file_ref": uploaded_file, "local_path": str(file_path)})
                 except Exception as e:
                     error_message = tr("notify.file_upload_failed", details=str(e))
                     self._show_notification_ui(tr("notify.file_upload_error"), error_message, "error")
@@ -859,6 +958,37 @@ class ClipboardToolAgent(BaseAgent):
                                 pass
                     elif content_info["type"] == "file":
                         try:
+                            # Prefer inline image part for image-output capable model
+                            p_local = None
+                            if content_info.get("local_path"):
+                                p_local = content_info.get("local_path")
+                            elif content_info.get("data"):
+                                p_local = content_info.get("data")
+                            elif content_info.get("file_ref") is not None:
+                                p_local = getattr(content_info["file_ref"], 'path', None)
+
+                            if self._is_image_output_capable(final_model_name) and p_local:
+                                try:
+                                    mime_type = self._guess_mime_type(p_local)
+                                    if isinstance(mime_type, str) and mime_type.startswith("image/"):
+                                        # Read file bytes and convert to inline image part
+                                        from pathlib import Path as _P
+                                        img_bytes = _P(p_local).read_bytes()
+                                        image_part = create_image_part(img_bytes)
+                                        user_parts.append(image_part)
+                                        file_ref_path = p_local
+                                        if run_id is not None and file_ref_path:
+                                            try:
+                                                cid = db.save_clipboard_item({"type": "file", "data": file_ref_path}, source="file_attach")
+                                                db.add_run_input(run_id, cid)
+                                            except Exception:
+                                                pass
+                                        # Skip uploading as FileRef in image-output path
+                                        continue
+                                except Exception:
+                                    pass
+
+                            # Fallback: use FileRef (for non-image files or non-image-output models)
                             if "file_ref" in content_info and content_info["file_ref"] is not None:
                                 user_parts.append(content_info["file_ref"])
                                 file_ref_path = getattr(content_info["file_ref"], 'path', None)
@@ -894,12 +1024,16 @@ class ClipboardToolAgent(BaseAgent):
                 except Exception:
                     return False
             if user_parts and not _has_text_part(user_parts):
-                # For image-output capable model, prefer a transform instruction that yields an image.
-                if self._is_image_output_capable(final_model_name):
+                # If using an image-output capable model and a system prompt is present,
+                # do NOT inject default text; rely on the prompt's system instruction.
+                if self._is_image_output_capable(final_model_name) and (final_system_prompt or "").strip():
+                    pass
+                elif self._is_image_output_capable(final_model_name):
+                    # No system prompt (e.g., free-input with only image): inject an image-transform default
                     try:
                         user_parts.insert(0, {"text": tr("free_input.attach_image_transform_default")})
                     except Exception:
-                        user_parts.insert(0, {"text": "Convert this image to a vivid color tone. Return the result as an image (PNG)."})
+                        user_parts.insert(0, {"text": "Convert this image to a vivid color tone. Return only the result as an image (PNG). No text output."})
                 else:
                     try:
                         user_parts.insert(0, {"text": tr("free_input.attach_prompt_default")})
@@ -1073,8 +1207,11 @@ class ClipboardToolAgent(BaseAgent):
             if input_cost_per_thousand_tokens == 0.0 and output_cost_per_thousand_tokens == 0.0:
                 cost_message_suffix = tr("pricing.unavailable_suffix")
 
-            cost_message = (f"{tr('pricing.estimated_cost_prefix')}{estimated_cost:.6f}{cost_message_suffix}"
-                            if (input_token_count or output_token_count) else cost_message_suffix)
+            if (input_token_count or output_token_count):
+                disp_total, _, _ = self._format_cost_values(estimated_cost)
+                cost_message = f"{tr('pricing.estimated_cost_prefix')}{disp_total}{cost_message_suffix}"
+            else:
+                cost_message = cost_message_suffix
 
             if full_response_text:
                 final_prompt_config = Prompt(
@@ -1321,8 +1458,8 @@ class ClipboardToolAgent(BaseAgent):
             try:
                 if hasattr(dialog, 'model_variable'):
                     display_val = dialog.model_variable.get()
-                    # Labels look like: "gemini-2.5-flash-lite (高速、低精度)" -> pick the first token
-                    model_name = display_val.split(" ")[0] if display_val else model_name
+                    # Map label -> id robustly using centralized helper
+                    model_name = model_label_to_id(display_val) if display_val else model_name
             except Exception:
                 pass
             temperature_val = 1.0

@@ -73,6 +73,9 @@ def _default_config_dict() -> Dict[str, Any]:
         "max_flow_steps": 5,
         "language": "auto",
         "theme_mode": "system",
+        # Pricing display currency
+        "display_currency": "USD",
+        "usd_to_display_rate": 1.0,
     }
 
 

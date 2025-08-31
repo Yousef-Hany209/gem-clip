@@ -179,3 +179,6 @@ class AppConfig(BaseModel):
     language: Optional[str] = "auto"
     # Theme mode (v7): 'system' | 'light' | 'dark'
     theme_mode: Optional[Literal['system','light','dark']] = 'system'
+    # Pricing display currency (v9)
+    display_currency: Optional[str] = 'USD'  # e.g., 'USD', 'JPY', 'EUR'
+    usd_to_display_rate: Optional[float] = 1.0  # how many display currency units per 1 USD

@@ -16,6 +16,12 @@
     "input_cost_per_thousand_tokens": 0.0003,
     "output_cost_per_thousand_tokens": 0.0025
   },
+  "gemini-2.5-flash-image-preview": {
+    "input_cost_per_thousand_tokens": 0.0003,
+    "output_cost_per_thousand_tokens": 0.03,
+    "image_output_tokens_per_image": 1290,
+    "per_image_output_cost_usd": 0.039
+  },
   "gemini-2.5-flash-lite": {
     "input_cost_per_thousand_tokens": 0.0001,
     "output_cost_per_thousand_tokens": 0.0004

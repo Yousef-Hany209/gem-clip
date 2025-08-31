@@ -150,13 +150,16 @@ class ClipboardHistorySelectorPopup(ctk.CTkToplevel):
             try:
                 t = r["type"]
                 if t == "text":
-                    self._history_items.append({"type": "text", "data": r.get("text", "")})
+                    self._history_items.append({"type": "text", "data": r["text"] or ""})
                 elif t == "image":
-                    b = r.get("image_blob")
+                    b = r["image_blob"]
                     b64 = base64.b64encode(b).decode("utf-8") if b else ""
                     self._history_items.append({"type": "image", "data": b64})
                 elif t == "file":
-                    self._history_items.append({"type": "file", "data": r.get("file_path", "")})
+                    self._history_items.append({"type": "file", "data": r["file_path"] or ""})
+                else:
+                    # Unknown types as text for safety
+                    self._history_items.append({"type": "text", "data": str(r.get("text", "")) if hasattr(r, 'get') else str(r["text"]) if "text" in r.keys() else ""})
                 added += 1
             except Exception:
                 continue
@@ -191,4 +194,10 @@ class ClipboardHistorySelectorPopup(ctk.CTkToplevel):
             button.grid(row=i, column=0, sticky="ew", padx=5, pady=2)
             self._buttons.append(button)
         self._offset += added
+        # Disable more button if no more rows
+        try:
+            if added < self._page_limit:
+                self.more_button.configure(state="disabled")
+        except Exception:
+            pass
         self._update_selection_highlight()
