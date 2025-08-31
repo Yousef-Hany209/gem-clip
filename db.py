@@ -428,15 +428,29 @@ def add_run_input(run_id: int, clipboard_item_id: Optional[int], extra_files: Op
         return int(cur.lastrowid)
 
 
-def add_run_output(run_id: int, prompt_id: Optional[str], input_id: Optional[int], content_text: Optional[str] = None, error_json: Optional[Dict[str, Any]] = None) -> int:
+def add_run_output(
+    run_id: int,
+    prompt_id: Optional[str],
+    input_id: Optional[int],
+    content_text: Optional[str] = None,
+    error_json: Optional[Dict[str, Any]] = None,
+    content_blob: Optional[bytes] = None,
+) -> int:
     conn = _connect()
     with _DB_LOCK, conn:
         cur = conn.execute(
             """
-            INSERT INTO run_output(run_id, prompt_id, input_id, content_text, error_json)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO run_output(run_id, prompt_id, input_id, content_text, error_json, content_blob)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (run_id, prompt_id, input_id, content_text, json.dumps(error_json, ensure_ascii=False) if error_json else None),
+            (
+                run_id,
+                prompt_id,
+                input_id,
+                content_text,
+                json.dumps(error_json, ensure_ascii=False) if error_json else None,
+                content_blob,
+            ),
         )
         return int(cur.lastrowid)
 

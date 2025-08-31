@@ -127,7 +127,12 @@ class PromptParameters(BaseModel):
 
 class Prompt(BaseModel):
     name: str
-    model: Literal["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"] = "gemini-2.5-flash-lite"
+    model: Literal[
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-image-preview",
+    ] = "gemini-2.5-flash-lite"
     system_prompt: str
     thinking_level: Literal["Fast", "Balanced", "High Quality", "Unlimited"] = "Balanced"
     enable_web: bool = False

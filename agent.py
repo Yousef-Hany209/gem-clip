@@ -83,6 +83,82 @@ class ClipboardToolAgent(BaseAgent):
         self._hotkey_manager = WindowsHotkeyManager(dispatch=self._dispatch_ui)
         self._register_hotkey()
 
+    def _is_image_output_capable(self, model_id: str) -> bool:
+        """Check models.json for image-output capability of a model id."""
+        try:
+            import json
+            from pathlib import Path
+            models_path = Path(__file__).resolve().parent / "models.json"
+            if not models_path.exists():
+                models_path = Path("models.json")
+            if models_path.exists():
+                with open(models_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for m in data:
+                    if m.get("id") == model_id:
+                        caps = m.get("capabilities") or {}
+                        return bool(caps.get("output_image"))
+        except Exception:
+            pass
+        # Fallback hardcode for known image-output model id
+        return model_id == "gemini-2.5-flash-image-preview"
+
+    def _copy_image_bytes_to_clipboard(self, png_bytes: bytes) -> None:
+        """Copy PNG bytes to Windows clipboard as a DIB (CF_DIB).
+
+        Converts PNG to BMP in-memory and strips the BITMAPFILEHEADER (first 14 bytes)
+        to produce a CF_DIB payload.
+        """
+        try:
+            from io import BytesIO
+            from PIL import Image
+            import ctypes
+            from ctypes import wintypes
+
+            with Image.open(BytesIO(png_bytes)) as im:
+                if im.mode not in ("RGB", "RGBA"):
+                    im = im.convert("RGB")
+                # Always save as BMP; CF_DIB expects a DIB without the 14-byte file header
+                with BytesIO() as bmp_buffer:
+                    im.save(bmp_buffer, format="BMP")
+                    bmp_data = bmp_buffer.getvalue()
+            # Strip BITMAPFILEHEADER (14 bytes)
+            dib_data = bmp_data[14:]
+
+            CF_DIB = 8
+            GMEM_MOVEABLE = 0x0002
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            memcpy = ctypes.cdll.msvcrt.memcpy
+
+            if not user32.OpenClipboard(None):
+                raise RuntimeError("OpenClipboard failed")
+            try:
+                if not user32.EmptyClipboard():
+                    raise RuntimeError("EmptyClipboard failed")
+                h_global = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(dib_data))
+                if not h_global:
+                    raise RuntimeError("GlobalAlloc failed")
+                p_global = kernel32.GlobalLock(h_global)
+                if not p_global:
+                    kernel32.GlobalFree(h_global)
+                    raise RuntimeError("GlobalLock failed")
+                try:
+                    memcpy(p_global, dib_data, len(dib_data))
+                finally:
+                    kernel32.GlobalUnlock(h_global)
+
+                if not user32.SetClipboardData(CF_DIB, h_global):
+                    kernel32.GlobalFree(h_global)
+                    raise RuntimeError("SetClipboardData failed")
+                # Ownership of h_global is transferred to the system on success
+            finally:
+                user32.CloseClipboard()
+        except Exception as e:
+            print(f"ERROR: Failed to set image to clipboard: {e}")
+            raise
+
     def _guess_mime_type(self, file_path: str) -> str:
         """Return a stable mime-type for known text/code formats to help Gemini parse files."""
         try:
@@ -423,6 +499,144 @@ class ClipboardToolAgent(BaseAgent):
     def _get_api_key(self) -> Optional[str]:
         return keyring.get_password(API_SERVICE_ID, "api_key")
 
+    async def _generate_with_image_output_model(
+        self,
+        *,
+        run_id: Optional[int],
+        final_prompt_name: str,
+        final_model_name: str,
+        final_system_prompt: str,
+        final_temperature: float,
+        user_parts: List[Any],
+        prompt_id: Optional[str],
+    ) -> str:
+        """Generate with google.genai for models that support image output and copy image to clipboard.
+
+        Returns accumulated text (if any).
+        """
+        # Import the new client lazily to avoid conflicts with google.generativeai.types alias
+        try:
+            from google import genai as g2
+            from google.genai import types as g2types
+        except Exception as e:
+            self._show_notification_ui(tr("common.error_title"), f"google.genai not available: {e}", level="error")
+            raise
+
+        client = g2.Client(api_key=self.api_key)
+
+        # Map existing parts (dicts) to google.genai parts
+        g2_parts: List[Any] = []
+        for p in user_parts or []:
+            try:
+                if isinstance(p, dict) and isinstance(p.get("text"), str):
+                    txt = p.get("text")
+                    if txt and txt.strip():
+                        g2_parts.append(g2types.Part.from_text(text=txt))
+                elif isinstance(p, dict) and isinstance(p.get("inline_data"), dict):
+                    inline = p["inline_data"]
+                    mime = inline.get("mime_type") or "image/png"
+                    data = inline.get("data")
+                    if isinstance(data, str):
+                        import base64 as _b64
+                        data = _b64.b64decode(data)
+                    if data:
+                        g2_parts.append(g2types.Part.from_bytes(mime_type=mime, data=data))
+                # Note: file refs from google.generativeai are not supported in google.genai path
+            except Exception:
+                pass
+
+        # Ensure there is at least some instruction text
+        if final_system_prompt and (not any(isinstance(pp, g2types.Part) and getattr(pp, "text", None) for pp in g2_parts)):
+            g2_parts.insert(0, g2types.Part.from_text(text=final_system_prompt))
+
+        contents = [
+            g2types.Content(role="user", parts=g2_parts if g2_parts else [g2types.Part.from_text(text=final_system_prompt or "")])
+        ]
+
+        generate_content_config = g2types.GenerateContentConfig(
+            response_modalities=["IMAGE", "TEXT"],
+            temperature=final_temperature,
+        )
+
+        full_text = ""
+        last_image_png: Optional[bytes] = None
+
+        try:
+            responses = client.models.generate_content_stream(
+                model=final_model_name,
+                contents=contents,
+                config=generate_content_config,
+            )
+            for chunk in responses:
+                # Text
+                try:
+                    if getattr(chunk, "text", None):
+                        full_text += chunk.text
+                        self.app.after(0, lambda c=chunk.text: self._update_notification_message(c))
+                except Exception:
+                    pass
+                # Image inline_data
+                try:
+                    cands = getattr(chunk, "candidates", None)
+                    if cands and cands[0].content and cands[0].content.parts:
+                        for part in cands[0].content.parts:
+                            inline = getattr(part, "inline_data", None)
+                            if inline and getattr(inline, "data", None):
+                                # Assume PNG bytes
+                                last_image_png = inline.data
+                except Exception:
+                    pass
+        except Exception as e:
+            self._show_notification_ui(tr("notify.api_error_title"), tr("notify.unexpected_error", details=str(e)), level="error")
+            raise
+
+        # If image produced, copy to clipboard
+        if last_image_png:
+            try:
+                self._copy_image_bytes_to_clipboard(last_image_png)
+            except Exception:
+                pass
+
+        # Build prompt snapshot for DB
+        final_prompt_config = Prompt(
+            name=final_prompt_name,
+            model=final_model_name,
+            system_prompt=final_system_prompt,
+            parameters=PromptParameters(
+                temperature=final_temperature,
+            ),
+            enable_web=False,
+        )
+
+        cost_message = tr("pricing.unavailable_suffix")
+
+        # Notify and persist
+        if last_image_png:
+            self._show_notification_ui(tr("notify.done_title"), tr("notify.copied_fmt", name=final_prompt_name, cost=cost_message), level="success")
+            # Persist run output (image in blob)
+            try:
+                if run_id is not None:
+                    out_id = db.add_run_output(run_id, prompt_id=prompt_id, input_id=None, content_text=full_text or None, error_json=None, content_blob=last_image_png)
+                    db.mark_output_copied(out_id)
+            except Exception:
+                pass
+            # Also keep as last_result_text for refine to work minimally
+            self.last_result_text = full_text or "[image]"
+            self.last_prompt_config = final_prompt_config
+        elif full_text:
+            # Fallback to text behavior
+            self._copy_to_clipboard_and_notify(full_text, final_prompt_config, cost_message)
+            try:
+                if run_id is not None:
+                    out_id = db.add_run_output(run_id, prompt_id=prompt_id, input_id=None, content_text=full_text)
+                    db.mark_output_copied(out_id)
+            except Exception:
+                pass
+            self.last_result_text = full_text
+            self.last_prompt_config = final_prompt_config
+
+        return full_text
+
     async def _process_clipboard_content(self, file_paths: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         contents = []
         if file_paths:
@@ -666,6 +880,20 @@ class ClipboardToolAgent(BaseAgent):
                 tools_list = None
 
             # Respect selected model (gemini-2.5-flash-lite also supports attachments); do not auto-upgrade model.
+
+            # If model supports image output using the new google.genai client, branch here
+            if self._is_image_output_capable(final_model_name):
+                # Handle image-output path separately and return
+                full_text_image = await self._generate_with_image_output_model(
+                    run_id=run_id,
+                    final_prompt_name=final_prompt_name,
+                    final_model_name=final_model_name,
+                    final_system_prompt=final_system_prompt,
+                    final_temperature=final_temperature,
+                    user_parts=user_parts,
+                    prompt_id=prompt_id,
+                )
+                return full_text_image
 
             # Prefer setting tools on the model instance (SDKs may not accept tools in GenerationConfig)
             try:

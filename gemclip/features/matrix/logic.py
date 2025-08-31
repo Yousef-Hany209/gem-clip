@@ -6,6 +6,7 @@ runtime structures suitable for the UI layer.
 from __future__ import annotations
 
 from typing import List, Dict, Any, Tuple
+import logging
 
 from gemclip.infra import db
 from gemclip.core import Prompt
@@ -28,6 +29,15 @@ def fetch_tab_payload(tab_id: int) -> Dict[str, Any]:
         checks = db.get_matrix_checked_positions(tab_id)
     except Exception:
         checks = []
+    try:
+        logging.debug(
+            f"MATRIX[fetch_tab_payload] tab_id={tab_id} inputs={len(inputs)} prompts={len(prompts)} results_positions={len(results)} row_sums={len(row_sums)} col_sums={len(col_sums)} final_text={'yes' if final_text else 'no'}"
+        )
+        # 先頭の結果1〜2件だけ短くプレビュー
+        preview = [(r, c, (str(t)[:30] + '...') if t and len(str(t)) > 30 else str(t)) for r, c, t in (results[:2] if results else [])]
+        logging.debug(f"MATRIX[fetch_tab_payload] results_preview={preview}")
+    except Exception:
+        pass
     return {
         'tab_id': tab_id,
         'session_id': meta.get('session_id'),

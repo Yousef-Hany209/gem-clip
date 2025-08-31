@@ -6,6 +6,7 @@ matrix window module to slim down.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import logging
 import customtkinter as ctk
 
 from .logic import build_prompts_dict, apply_results_to_state
@@ -49,12 +50,42 @@ def apply_results_summaries(win: Any, data: Dict[str, Any]) -> None:
     results = data.get('results') or []
     num_rows = len(win.input_data)
     num_cols = len(win.prompts)
+    try:
+        logging.debug(
+            f"MATRIX[apply_results_summaries] positions={len(results)} rows={num_rows} cols={num_cols}"
+        )
+    except Exception:
+        pass
     full, trunc = apply_results_to_state(results, num_rows, num_cols)
+    # Always set backing full results
     win._full_results = full
-    win.results = [
-        [ctk.StringVar(value=trunc[r][c]) for c in range(num_cols)]
-        for r in range(num_rows)
-    ]
+    # Update existing StringVars to keep widget trace bindings alive.
+    # Create only when missing.
+    while len(win.results) < num_rows:
+        win.results.append([])
+    for r in range(num_rows):
+        while len(win.results[r]) < num_cols:
+            win.results[r].append(ctk.StringVar(value=""))
+        for c in range(num_cols):
+            try:
+                win.results[r][c].set(trunc[r][c])
+            except Exception:
+                # Replace corrupt/mismatched entries defensively
+                win.results[r][c] = ctk.StringVar(value=trunc[r][c])
+    # Log a few preview cells to verify propagation
+    try:
+        previews = []
+        mxr = min(num_rows, 2)
+        mxc = min(num_cols, 2)
+        for r in range(mxr):
+            row_vals = []
+            for c in range(mxc):
+                val = trunc[r][c] if r < len(trunc) and c < len(trunc[r]) else ''
+                row_vals.append((r, c, (val[:30] + '...') if len(val) > 30 else val))
+            previews.extend(row_vals)
+        logging.debug(f"MATRIX[apply_results_summaries] preview={previews}")
+    except Exception:
+        pass
     # Row summaries
     row_sums = data.get('row_sums') or []
     if row_sums:
@@ -118,4 +149,3 @@ def update_session_label(win: Any, data: Dict[str, Any]) -> None:
             win._session_label_var.set(f"{tr('matrix.toolbar.session_label')} {label}")
     except Exception:
         pass
-

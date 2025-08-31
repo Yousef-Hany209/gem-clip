@@ -1,0 +1,68 @@
+# ------------------------------
+# Python caches and artifacts
+# ------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# venvs and local Python environments
+.venv/
+venv/
+env/
+.python-version
+
+# Packaging / build outputs
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+# PyInstaller / freezing
+*.spec
+
+# Testing and coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Linters / type checkers / tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.hypothesis/
+
+# Logs and local runtime data (keep tracked assets like locales/prompts)
+logs/
+*.log
+/data/
+/tmp/
+
+# Local config that should live under %APPDATA%/Gem Clip/
+/config.json
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.code-workspace
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Misc
+.env
+.env.*
+*.swp
+*.swo
+*.bak
+~$*
+
+# Note: Do NOT ignore asset directories that are part of the repo
+# locales/, prompts/, prompt_set/, icons/media in repo root should remain tracked.

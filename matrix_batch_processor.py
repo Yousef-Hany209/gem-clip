@@ -53,6 +53,66 @@ from CTkMessagebox import CTkMessagebox
 SHOW_FILE_SESSION_UI = False  # Hide legacy file session save/load UI; prefer DB sessions + import/export
 
 
+def apply_loaded_tab_preserve_tabs(win, data: dict):
+    """Apply a loaded tab payload without destroying other tabs.
+
+    - Updates active tab's name and prompts
+    - Rebuilds UI arrays and applies results/summaries
+    - Snapshots state back into the active tab
+    """
+    logging.debug("DEBUG: apply_loaded_tab_preserve_tabs - start")
+    try:
+        import time as _t
+        win._just_loaded_at = _t.time()
+    except Exception:
+        pass
+
+    # IDs, inputs, prompts
+    set_ids_from_payload(win, data)
+    apply_inputs_prompts(win, data)
+
+    # Update active tab meta without nuking others
+    try:
+        tab_name = str(data.get('tab_name') or tr('matrix.tab.default'))
+        prompts_obj = {pid: (p.model_copy(deep=True) if hasattr(p, 'model_copy') else Prompt(**p.model_dump())) for pid, p in win.prompts.items()}
+        if not isinstance(getattr(win, '_tabs', None), list) or not win._tabs:
+            win._tabs = [{'name': tab_name, 'prompts_obj': prompts_obj, 'state': None}]
+            win._active_tab_index = 0
+        else:
+            idx = int(getattr(win, '_active_tab_index', 0) or 0)
+            if idx < 0 or idx >= len(win._tabs):
+                idx = 0
+                win._active_tab_index = 0
+            win._tabs[idx]['name'] = tab_name
+            win._tabs[idx]['prompts_obj'] = prompts_obj
+            win._tabs[idx]['state'] = None
+        try:
+            win._tabs[win._active_tab_index]['frame'] = win.scrollable_content_frame
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # Reset UI arrays and rebuild
+    reset_state_arrays(win)
+    win._update_ui()
+    finalize_canvas(win)
+    try:
+        win._render_tabbar()
+    except Exception:
+        pass
+
+    # Apply results and summaries into UI
+    try:
+        apply_results_summaries(win, data)
+        try:
+            if 0 <= win._active_tab_index < len(win._tabs):
+                win._tabs[win._active_tab_index]['state'] = win._snapshot_state()
+        except Exception:
+            pass
+    except Exception:
+        logging.exception("ERROR: apply_loaded_tab_preserve_tabs - apply results failed")
+
 class MatrixBatchProcessorWindow(ctk.CTkToplevel):
     def __init__(self, prompts: Dict[str, Prompt], on_processing_completed: Callable, llm_agent_factory: Callable[[str, Prompt], LlmAgent], notification_callback: Callable[[str, str, str], None], worker_loop: asyncio.AbstractEventLoop, parent_app: ctk.CTk, agent: Any):
         super().__init__(parent_app)
@@ -206,7 +266,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
 
             # 適用
             try:
-                self._apply_loaded_tab(payload)
+                apply_loaded_tab_preserve_tabs(self, payload) if 'apply_loaded_tab_preserve_tabs' in globals() else self._apply_loaded_tab(payload)
                 logging.debug("DEBUG: _load_tab_async_safely - ロード済みタブの適用が完了しました。")
                 try:
                     self.lift(); self.focus_force()
