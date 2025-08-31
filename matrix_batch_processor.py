@@ -388,15 +388,29 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
 
     # --- Centering helpers for dialogs ---
     def _center_toplevel(self, win: ctk.CTkToplevel) -> None:
+        """Center dialog horizontally; use fixed top offset vertically.
+
+        - Horizontal: screen center based on current/requested width
+        - Vertical: fixed offset from top (styles.DIALOG_TOP_OFFSET)
+        Also re-center once more shortly after to account for late geometry changes.
+        """
+        def _do_center():
+            try:
+                win.update_idletasks()
+                sw = win.winfo_screenwidth()
+                w = max(int(win.winfo_width()), int(win.winfo_reqwidth()))
+                h = max(int(win.winfo_height()), int(win.winfo_reqheight()))
+                x = max(0, (sw - w) // 2)
+                try:
+                    y = int(getattr(styles, 'DIALOG_TOP_OFFSET', 160))
+                except Exception:
+                    y = 160
+                win.geometry(f"{w}x{h}+{x}+{y}")
+            except Exception:
+                pass
+        _do_center()
         try:
-            win.update_idletasks()
-            sw = win.winfo_screenwidth()
-            sh = win.winfo_screenheight()
-            w = max(1, win.winfo_width())
-            h = max(1, win.winfo_height())
-            x = (sw - w) // 2
-            y = (sh - h) // 2
-            win.geometry(f"{w}x{h}+{x}+{y}")
+            win.after(120, _do_center)
         except Exception:
             pass
 
@@ -1500,8 +1514,8 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                 if not sel:
                     return
                 sid = int(sel.split('#')[-1].rstrip(')'))
-            top = ctk.CTkToplevel(dlg)
-            self._center_toplevel(top)
+                top = ctk.CTkToplevel(dlg)
+                self._center_toplevel(top)
                 top.title(tr("common.edit"))
                 try:
                     top.transient(dlg)
@@ -1571,8 +1585,8 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                 if not sel:
                     return
                 tid = int(sel.split('#')[-1].rstrip(')'))
-            top = ctk.CTkToplevel(dlg)
-            self._center_toplevel(top)
+                top = ctk.CTkToplevel(dlg)
+                self._center_toplevel(top)
                 top.title(tr("common.edit"))
                 try:
                     top.transient(dlg)
