@@ -1,6 +1,6 @@
 # Gem Clip
 
-[![メイン画面](img/main_list.png)](img/main_list.png)
+[![メイン画面](img/jp_main_list.png)](img/jp_main_list.png)
 
 **Gem Clip**は、クリップボードの内容やファイルをGoogle Gemini APIで瞬時に処理するためのWindows向けデスクトップツールです。
 
@@ -50,7 +50,7 @@
     初回起動時、タスクトレイにアイコンが表示されます。
 
 2.  タスクトレイのアイコンを右クリックし、「設定 (Settings)」を選択します。
-    [![設定画面](img/setting.png)](img/setting.png)
+    [![設定画面](img/jp_setting.png)](img/jp_setting.png)
 
 3.  設定画面が開いたら、「API Key」の欄に取得したGoogle AI APIキーを入力し、「Save & Close」ボタンを押します。
 
@@ -58,14 +58,14 @@
 
 タスクトレイメニューから「プロンプト管理 (Prompt Manager)」を開くと、メイン画面が表示されます。
 
-[![プロンプト管理画面](img/main_list.png)](img/main_list.png)
+[![プロンプト管理画面](img/jp_main_list.png)](img/jp_main_list.png)
 
 *   **追加:** `+ Add Prompt`ボタンで新しいプロンプトを作成できます。
 *   **編集:** 各プロンプトの「編集 (Edit)」ボタンで、名前、システムプロンプト、モデル、パラメータなどを変更できます。
 *   **並び替え:** 各行の「≡」ハンドルをドラッグ＆ドロップして、プロンプトの表示順を変更できます。
 *   **削除:** 「削除 (Delete)」ボタンで不要なプロンプトを削除します。
 
-[![プロンプト設定画面](img/prompt_setting.png)](img/prompt_setting.png)
+[![プロンプト設定画面](img/jp_prompt_setting.png)](img/jp_prompt_setting.png)
 
 ### 3. 基本的な使い方（プロンプトの実行）
 
@@ -78,7 +78,7 @@
 
 ホットキーで表示されるプロンプト選択ウィンドウで「自由入力 (Free Input)」を選ぶと、専用のダイアログが開きます。
 
-[![自由入力画面](img/free_input.png)](img/free_input.png)
+[![自由入力画面](img/jp_free_input.png)](img/jp_free_input.png)
 
 ここに直接指示を入力して、一度きりのタスクを実行できます。ファイルの添付もこの画面から可能です。
 
@@ -87,14 +87,14 @@
 タスクトレイメニューから「マトリクス処理 (Matrix Processor)」を選択すると、マトリクス処理ウィンドウが開きます。
 
 1.  **データ入力:** 左側のテキストエリアに、処理したいデータを1行に1アイテムずつ入力します。（例: 商品レビュー、顧客からの質問など）
-    [![マトリクス入力画面](img/matrix_input.png)](img/matrix_input.png)
+    [![マトリクス入力画面](img/jp_matrix_input.png)](img/jp_matrix_input.png)
 
 2.  **プレビューと実行:** 「プレビュー (Preview)」ボタンを押すと、入力データを行、プロンプトを列とする表が生成されます。実行したいセルにチェックを入れ、「選択項目を実行 (Run Selected)」ボタンを押します。
-    [![マトリクスプレビュー画面](img/matrix_preview.png)](img/matrix_preview.png)
+    [![マトリクスプレビュー画面](img/jp_matrix_preview.png)](img/jp_matrix_preview.png)
 
 3.  **結果の確認:** 処理が完了すると、各セルの結果が表示されます。行ごと、または列ごとのサマリーも生成できます。
-    [![マトリクス結果画面](img/matrix_rowcol_result.png)](img/matrix_rowcol_result.png)
-    [![マトリクスサマリー画面](img/matrix_rowcol_summary.png)](img/matrix_rowcol_summary.png)
+    [![マトリクス結果画面](img/jp_matrix_rowcol_result.png)](img/jp_matrix_rowcol_result.png)
+    [![マトリクスサマリー画面](img/jp_matrix_rowcol_summary.png)](img/jp_matrix_rowcol_summary.png)
 
 ## 💻 開発 (Development)
 
