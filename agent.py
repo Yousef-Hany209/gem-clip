@@ -114,47 +114,77 @@ class ClipboardToolAgent(BaseAgent):
             from PIL import Image
             import ctypes
             from ctypes import wintypes
+            import time as _time
 
+            # Convert PNG -> BMP bytes
             with Image.open(BytesIO(png_bytes)) as im:
-                if im.mode not in ("RGB", "RGBA"):
+                if im.mode != "RGB":
                     im = im.convert("RGB")
-                # Always save as BMP; CF_DIB expects a DIB without the 14-byte file header
                 with BytesIO() as bmp_buffer:
                     im.save(bmp_buffer, format="BMP")
                     bmp_data = bmp_buffer.getvalue()
-            # Strip BITMAPFILEHEADER (14 bytes)
-            dib_data = bmp_data[14:]
+            dib_data = bmp_data[14:]  # strip BITMAPFILEHEADER (14 bytes)
 
             CF_DIB = 8
             GMEM_MOVEABLE = 0x0002
+            GMEM_ZEROINIT = 0x0040
 
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
-            memcpy = ctypes.cdll.msvcrt.memcpy
 
-            if not user32.OpenClipboard(None):
-                raise RuntimeError("OpenClipboard failed")
-            try:
-                if not user32.EmptyClipboard():
-                    raise RuntimeError("EmptyClipboard failed")
-                h_global = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(dib_data))
-                if not h_global:
-                    raise RuntimeError("GlobalAlloc failed")
-                p_global = kernel32.GlobalLock(h_global)
-                if not p_global:
-                    kernel32.GlobalFree(h_global)
-                    raise RuntimeError("GlobalLock failed")
+            # Prototypes for safety on 64-bit
+            kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+            kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+            kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+            kernel32.GlobalUnlock.restype = wintypes.BOOL
+            kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+            kernel32.GlobalFree.restype = wintypes.HGLOBAL
+            user32.OpenClipboard.argtypes = [wintypes.HWND]
+            user32.OpenClipboard.restype = wintypes.BOOL
+            user32.EmptyClipboard.argtypes = []
+            user32.EmptyClipboard.restype = wintypes.BOOL
+            user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+            user32.SetClipboardData.restype = wintypes.HANDLE
+            user32.CloseClipboard.argtypes = []
+            user32.CloseClipboard.restype = wintypes.BOOL
+
+            def _write_once() -> None:
+                if not user32.OpenClipboard(None):
+                    raise RuntimeError("OpenClipboard failed")
                 try:
-                    memcpy(p_global, dib_data, len(dib_data))
-                finally:
-                    kernel32.GlobalUnlock(h_global)
+                    if not user32.EmptyClipboard():
+                        raise RuntimeError("EmptyClipboard failed")
+                    h_global = kernel32.GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, len(dib_data))
+                    if not h_global:
+                        raise RuntimeError("GlobalAlloc failed")
+                    p_global = kernel32.GlobalLock(h_global)
+                    if not p_global:
+                        kernel32.GlobalFree(h_global)
+                        raise RuntimeError("GlobalLock failed")
+                    try:
+                        ctypes.memmove(p_global, dib_data, len(dib_data))
+                    finally:
+                        kernel32.GlobalUnlock(h_global)
 
-                if not user32.SetClipboardData(CF_DIB, h_global):
-                    kernel32.GlobalFree(h_global)
-                    raise RuntimeError("SetClipboardData failed")
-                # Ownership of h_global is transferred to the system on success
-            finally:
-                user32.CloseClipboard()
+                    if not user32.SetClipboardData(CF_DIB, h_global):
+                        kernel32.GlobalFree(h_global)
+                        raise RuntimeError("SetClipboardData failed")
+                    # Success: ownership of h_global transfers to the system
+                finally:
+                    user32.CloseClipboard()
+
+            # Retry a few times in case clipboard is busy
+            last_err = None
+            for _ in range(5):
+                try:
+                    _write_once()
+                    return
+                except Exception as e:
+                    last_err = e
+                    _time.sleep(0.05)
+            raise last_err or RuntimeError("Clipboard write failed")
         except Exception as e:
             print(f"ERROR: Failed to set image to clipboard: {e}")
             raise
@@ -584,6 +614,17 @@ class ClipboardToolAgent(BaseAgent):
                             if inline and getattr(inline, "data", None):
                                 # Assume PNG bytes
                                 last_image_png = inline.data
+                            # Some responses may return file_data instead of inline_data
+                            fdat = getattr(part, "file_data", None)
+                            if fdat and (getattr(fdat, "file_uri", None) or getattr(fdat, "file_id", None)) and not last_image_png:
+                                try:
+                                    file_name = getattr(fdat, "file_uri", None) or getattr(fdat, "file_id", None)
+                                    dl = client.files.download(file_name=file_name)
+                                    maybe_bytes = getattr(dl, "data", None) or getattr(dl, "bytes", None) or getattr(dl, "content", None)
+                                    if isinstance(maybe_bytes, (bytes, bytearray)):
+                                        last_image_png = bytes(maybe_bytes)
+                                except Exception:
+                                    pass
                 except Exception:
                     pass
         except Exception as e:
