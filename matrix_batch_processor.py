@@ -1441,7 +1441,7 @@ class MatrixBatchProcessorWindow(ctk.CTkToplevel):
                 box = CTkMessagebox(title=tr("common.success"), message=tr("matrix.set.deleted"), icon="info")
                 self._center_toplevel(box)
                 box.wait_window()
-                    dlg.destroy()
+                dlg.destroy()
             except Exception as e:
                 box = CTkMessagebox(title=tr("common.error"), message=tr("matrix.set.delete_failed", details=str(e)), icon="cancel")
                 self._center_toplevel(box)
