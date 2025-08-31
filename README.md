@@ -58,7 +58,7 @@ With a simple hotkey, you can summon pre-registered prompts to streamline a vari
 
 Open the "Prompt Manager" from the tray menu to display the main window.
 
-[![Prompt Manager Screen](img/main_list.png)](img/main_list.png)
+[![Prompt Manager Screen](img/prompt_manage.png)](img/prompt_manage.png)
 
 *   **Add:** Create a new prompt with the `+ Add Prompt` button.
 *   **Edit:** Modify the name, system prompt, model, parameters, and more using the "Edit" button for each prompt.
@@ -70,8 +70,12 @@ Open the "Prompt Manager" from the tray menu to display the main window.
 ### 3. Basic Usage (Executing a Prompt)
 
 1.  Copy the text or image you want to process to your clipboard.
-2.  Press the hotkey (default: `Ctrl+Shift+C`).
+2.  Display the prompt selection screen in one of the following ways:
+    *   Press the hotkey (default: `Ctrl+Shift+C`).
+    *   Left-click the system tray icon.
+    *   Right-click the system tray icon and select "Prompt List" from the menu.
 3.  The prompt selection window will appear at your cursor's location. Click the prompt you want to execute.
+    [![Prompt Selection Screen](img/main_list.png)](img/main_list.png)
 4.  The process will run, and upon completion, the result will be copied to your clipboard, and a desktop notification will appear.
 
 ### 4. Free Input
