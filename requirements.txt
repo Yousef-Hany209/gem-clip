@@ -1,0 +1,11 @@
+# Core application dependencies
+google-generativeai
+customtkinter
+pystray
+Pillow
+pyperclip
+keyring
+CTkMessagebox
+
+# For development and testing
+pytest
