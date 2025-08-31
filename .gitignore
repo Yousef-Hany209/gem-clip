@@ -44,12 +44,12 @@ logs/
 
 # Local config that should live under %APPDATA%/Gem Clip/
 /config.json
+/AGENTS.md
 
 # IDE/editor settings
 .vscode/
 .idea/
 *.code-workspace
-AGENTS.md
 
 # OS-specific files
 .DS_Store
